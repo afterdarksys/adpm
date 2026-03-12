@@ -1,0 +1,44 @@
+{
+  "name": "ss",
+  "display_name": "SecretServer CLI",
+  "description": "SecretServer.io CLI — enterprise secret management",
+  "homepage": "https://secretserver.io",
+  "license": "Proprietary",
+  "maintainer": "After Dark Systems <support@afterdarksys.com>",
+
+  "github": {
+    "owner": "afterdarksys",
+    "repo": "secretserver-cli"
+  },
+
+  "homebrew": {
+    "tap_owner": "afterdark",
+    "tap_repo": "homebrew-tap",
+    "formula": "ss"
+  },
+
+  "build": {
+    "type": "go",
+    "main": "./cmd/adkm/main.go",
+    "binary": "ss",
+    "module": "github.com/afterdark/secretserver.io",
+    "version_var": "github.com/afterdark/secretserver.io/cli/cmd.Version",
+    "commit_var":  "github.com/afterdark/secretserver.io/cli/cmd.Commit",
+    "date_var":    "github.com/afterdark/secretserver.io/cli/cmd.BuildDate"
+  },
+
+  "platforms": [
+    "darwin-arm64",
+    "darwin-x86_64",
+    "linux-x86_64",
+    "linux-aarch64",
+    "windows-x86_64"
+  ],
+
+  "install": {
+    "bin": ["ss"],
+    "doc": "README"
+  },
+
+  "_comment": "Run: adpm/release.sh --pkg adpm/packages/ss.pkg.json 0.3.1 --source /path/to/secretserver.io"
+}

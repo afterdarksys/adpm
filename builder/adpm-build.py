@@ -7,9 +7,11 @@ Homage to Todd Bennett III, unixeng.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -105,6 +107,43 @@ class ADPMBuilder:
                         if lib.is_file():
                             shutil.copy2(lib, platform_lib / lib.name)
                             print(f"  Added library: {lib.name}")
+                            
+    def generate_sbom(self):
+        """Generate a basic SBOM and embed it in metadata."""
+        print("  Generating Software Bill of Materials (SBOM)...")
+        sbom = {
+            "format": "cyclonedx-adpm-basic",
+            "version": "1.0",
+            "components": []
+        }
+        
+        # We perform a basic scan of the staging lib/ and python/ dirs
+        if (self.temp_dir / "lib").exists():
+            for platform_dir in (self.temp_dir / "lib").iterdir():
+                if platform_dir.is_dir():
+                    for lib in platform_dir.glob("*"):
+                        if lib.is_file():
+                            import hashlib
+                            sha256 = hashlib.sha256(lib.read_bytes()).hexdigest()
+                            sbom["components"].append({
+                                "type": "library",
+                                "name": lib.name,
+                                "purl": f"pkg:generic/{lib.name}",
+                                "hashes": [{"alg": "SHA-256", "content": sha256}]
+                            })
+                            
+        if (self.temp_dir / "python").exists():
+            for whl in (self.temp_dir / "python").glob("*.whl"):
+                import hashlib
+                sha256 = hashlib.sha256(whl.read_bytes()).hexdigest()
+                sbom["components"].append({
+                    "type": "library",
+                    "name": whl.name,
+                    "purl": f"pkg:pypi/{whl.name}",
+                    "hashes": [{"alg": "SHA-256", "content": sha256}]
+                })
+                
+        self.metadata["sbom"] = sbom
 
     def add_python_packages(self, package_names: List[str]):
         """Download and add Python packages (wheels)."""
@@ -214,8 +253,8 @@ echo "Add to PATH:"
 echo "  export PATH=\"$INSTALL_PREFIX/bin:\\$PATH\""
 echo
 '''
-        install_script = install_script.replace("{{ NAME }}", self.name)
-        install_script = install_script.replace("{{ VERSION }}", self.version)
+        install_script = install_script.replace('"{{ NAME }}"', shlex.quote(self.name))
+        install_script = install_script.replace('"{{ VERSION }}"', shlex.quote(self.version))
 
         install_path = self.temp_dir / "INSTALL.sh"
         install_path.write_text(install_script)
@@ -227,41 +266,84 @@ echo
         with open(meta_path, 'w') as f:
             json.dump(self.metadata, f, indent=2)
 
-    def build_archive(self) -> Path:
-        """Build the final .adpm archive (cpio.bz2)."""
+    def strip_files(self, target_platform: str):
+        """Strip debug symbols from binaries and libraries."""
+        for d in ["bin", "lib"]:
+            target_dir = self.temp_dir / d / target_platform
+            if not target_dir.exists():
+                continue
+            for f in target_dir.glob("*"):
+                if f.is_file():
+                    try:
+                        subprocess.run(["strip", str(f)], check=False, capture_output=True)
+                    except Exception as e:
+                        print(f"    Warning: Failed to strip {f.name}: {e}")
+
+    def build_archive(self, compress: str = "bzip2") -> Path:
+        """Build the final .adpm archive."""
         output_file = self.output_dir / f"{self.name}-{self.version}.adpm"
 
         print(f"\nBuilding archive: {output_file}")
 
         # Create cpio archive
         cpio_file = self.temp_dir / "package.cpio"
-        subprocess.run(
-            f"cd {self.temp_dir} && find . -print | cpio -o > {cpio_file}",
-            shell=True,
-            check=True
-        )
+        find_proc = subprocess.Popen(["find", ".", "-print"], stdout=subprocess.PIPE, cwd=self.temp_dir)
+        with open(cpio_file, "wb") as f_out:
+            subprocess.run(["cpio", "-o"], stdin=find_proc.stdout, stdout=f_out, cwd=self.temp_dir, check=True)
+        find_proc.wait()
 
-        # Compress with bzip2
-        subprocess.run(
-            ["bzip2", "-9", str(cpio_file)],
-            check=True
-        )
+        if compress == "bzip2":
+            subprocess.run(["bzip2", "-9", str(cpio_file)], check=True)
+            ext = "bz2"
+        elif compress == "gzip":
+            subprocess.run(["gzip", "-9", str(cpio_file)], check=True)
+            ext = "gz"
+        elif compress == "xz":
+            subprocess.run(["xz", "-9", str(cpio_file)], check=True)
+            ext = "xz"
+        else:
+            raise ValueError(f"Unsupported compression: {compress}")
 
         # Move to output directory
-        shutil.move(str(cpio_file) + ".bz2", output_file)
+        final_dest = output_file.with_suffix("." + ext)
+        shutil.move(str(cpio_file) + "." + ext, final_dest)
 
-        print(f"✓ Package created: {output_file}")
-        print(f"  Size: {output_file.stat().st_size / 1024 / 1024:.2f} MB")
+        print(f"✓ Package created: {final_dest}")
+        print(f"  Size: {final_dest.stat().st_size / 1024 / 1024:.2f} MB")
 
-        return output_file
-
+        return final_dest
+        
+    def sign_archive(self, archive_path: Path, key: str = None):
+        """Sign the archive with GPG and generate a SHA256 sum."""
+        print("  Signing package and generating checksums...")
+        
+        # SHA256 Sum
+        sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        sha_path = archive_path.with_suffix(archive_path.suffix + ".sha256")
+        sha_path.write_text(f"{sha256}  {archive_path.name}\n")
+        print(f"  Generated SHA256: {sha_path.name}")
+        
+        # GPG Signature
+        gpg_args = ["gpg", "--detach-sign", "--armor"]
+        if key:
+            gpg_args.extend(["--default-key", key])
+        gpg_args.append(str(archive_path))
+        
+        try:
+            subprocess.run(gpg_args, check=True, capture_output=True)
+            print(f"  Generated GPG signature: {archive_path.name}.asc")
+        except subprocess.CalledProcessError as e:
+            print(f"    Warning: Failed to sign package. Is GPG configured? Error: {e.stderr.decode()}")
+            
     def cleanup(self):
         """Clean up temporary directory."""
         if self.temp_dir and self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
 
     def build(self, binaries: List[str] = None, libraries: List[str] = None,
-              python_packages: List[str] = None, target_platform: str = None):
+              python_packages: List[str] = None, target_platform: str = None,
+              strip: bool = False, compress: str = "bzip2",
+              sign: bool = False, key: str = None, generate_sbom: bool = False):
         """Build complete package."""
         try:
             if not target_platform:
@@ -285,10 +367,21 @@ echo
                 print("Adding Python packages...")
                 self.add_python_packages(python_packages)
 
+            if strip:
+                print("Stripping debug symbols...")
+                self.strip_files(target_platform)
+
+            if generate_sbom:
+                self.generate_sbom()
+
             self.create_install_script()
             self.write_metadata()
 
-            return self.build_archive()
+            archive_path = self.build_archive(compress)
+            if sign:
+                self.sign_archive(archive_path, key)
+                
+            return archive_path
 
         finally:
             self.cleanup()
@@ -305,6 +398,11 @@ def main():
     parser.add_argument("--libraries", nargs="+", help="Library files or directories to include")
     parser.add_argument("--python", nargs="+", help="Python packages to include")
     parser.add_argument("--output", default="adpm/packages", help="Output directory")
+    parser.add_argument("--strip", action="store_true", help="Strip debug symbols from binaries and libraries")
+    parser.add_argument("--compress", choices=["bzip2", "gzip", "xz"], default="bzip2", help="Compression algorithm")
+    parser.add_argument("--sign", action="store_true", help="GPG sign the resulting archive (creates .asc format detach signature)")
+    parser.add_argument("--key", help="GPG key ID to use for signing")
+    parser.add_argument("--generate-sbom", action="store_true", help="Generate and embed SBOM in package metadata")
 
     args = parser.parse_args()
 
@@ -313,7 +411,12 @@ def main():
         binaries=args.binaries,
         libraries=args.libraries,
         python_packages=args.python,
-        target_platform=args.platform
+        target_platform=args.platform,
+        strip=args.strip,
+        compress=args.compress,
+        sign=args.sign,
+        key=args.key,
+        generate_sbom=args.generate_sbom
     )
 
 
