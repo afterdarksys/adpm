@@ -23,6 +23,7 @@ The script receives a 'sys' global with the full systems API:
   sys.yaml     — parse, encode
   sys.json     — parse, encode, encode_pretty
   sys.ini      — parse, encode, get
+  sys.ssh      — run, copy_to, copy_from, write
   sys.services — start, stop, restart, enable, disable, status
   sys.alerts   — push (stub)
   sys.security — yara_scan, scan_memory (stubs)
@@ -35,7 +36,8 @@ Entitlements are deny-by-default. Use flags to grant access:
     --allow-fs-read /etc \
     --allow-config-write /etc/postfix \
     --allow-service-reload postfix \
-    --allow-net dnsscience.io`,
+    --allow-net dnsscience.io \
+    --allow-ssh 10.0.0.1 --allow-ssh 10.0.0.2`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		path := args[0]
@@ -45,6 +47,7 @@ Entitlements are deny-by-default. Use flags to grant access:
 		allowNet, _ := cmd.Flags().GetStringArray("allow-net")
 		allowConfigWrite, _ := cmd.Flags().GetStringArray("allow-config-write")
 		allowServiceReload, _ := cmd.Flags().GetStringArray("allow-service-reload")
+		allowSSH, _ := cmd.Flags().GetStringArray("allow-ssh")
 		allowExec, _ := cmd.Flags().GetBool("allow-exec")
 
 		engine := sysscript.New(&sysscript.Entitlements{
@@ -53,6 +56,7 @@ Entitlements are deny-by-default. Use flags to grant access:
 			AllowNetOutbound:   allowNet,
 			AllowConfigWrite:   allowConfigWrite,
 			AllowServiceReload: allowServiceReload,
+			AllowSSH:           allowSSH,
 			AllowExec:          allowExec,
 		})
 
@@ -75,5 +79,6 @@ func init() {
 	scriptCmd.Flags().StringArray("allow-net", []string{}, "Hostnames/domains allowed for net.http_get (repeatable, * = all)")
 	scriptCmd.Flags().StringArray("allow-config-write", []string{}, "Path prefixes allowed for atomic config.write (repeatable)")
 	scriptCmd.Flags().StringArray("allow-service-reload", []string{}, "Service names allowed for services.* and config.reload (repeatable, * = all)")
+	scriptCmd.Flags().StringArray("allow-ssh", []string{}, "Hosts/IPs allowed for sys.ssh.* (repeatable, * = all)")
 	scriptCmd.Flags().Bool("allow-exec", false, "Allow sys.exec.run and sys.proc.kill")
 }

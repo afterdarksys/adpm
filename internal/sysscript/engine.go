@@ -23,6 +23,7 @@ type Entitlements struct {
 	AllowExec          bool     `json:"allow_exec"`
 	AllowConfigWrite   []string `json:"allow_config_write"`   // paths allowed for atomic config writes
 	AllowServiceReload []string `json:"allow_service_reload"` // service names allowed to reload
+	AllowSSH           []string `json:"allow_ssh"`            // hosts/IPs allowed for sys.ssh (supports *)
 }
 
 // Engine wraps Starlark execution with a full sys.* API surface.
@@ -170,6 +171,14 @@ func (engine *Engine) buildSysModule() *starlarkstruct.Struct {
 		"run": starlark.NewBuiltin("run", engine.containersRun),
 	}
 
+	// sys.ssh
+	sysSSH := starlark.StringDict{
+		"run":       starlark.NewBuiltin("run", engine.sshRun),
+		"copy_to":   starlark.NewBuiltin("copy_to", engine.sshCopyTo),
+		"copy_from": starlark.NewBuiltin("copy_from", engine.sshCopyFrom),
+		"write":     starlark.NewBuiltin("write", engine.sshWrite),
+	}
+
 	sysDict := starlark.StringDict{
 		"net":        starlarkstruct.FromStringDict(starlark.String("net"), sysNet),
 		"exec":       starlarkstruct.FromStringDict(starlark.String("exec"), sysExec),
@@ -180,6 +189,7 @@ func (engine *Engine) buildSysModule() *starlarkstruct.Struct {
 		"ini":        starlarkstruct.FromStringDict(starlark.String("ini"), sysINI),
 		"proc":       starlarkstruct.FromStringDict(starlark.String("proc"), sysProc),
 		"services":   starlarkstruct.FromStringDict(starlark.String("services"), sysSvc),
+		"ssh":        starlarkstruct.FromStringDict(starlark.String("ssh"), sysSSH),
 		"alerts":     starlarkstruct.FromStringDict(starlark.String("alerts"), sysAlerts),
 		"security":   starlarkstruct.FromStringDict(starlark.String("security"), sysSecurity),
 		"events":     starlarkstruct.FromStringDict(starlark.String("events"), sysEvents),
