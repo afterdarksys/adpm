@@ -75,10 +75,12 @@ func (engine *Engine) buildSysModule() *starlarkstruct.Struct {
 
 	// sys.net
 	sysNet := starlark.StringDict{
-		"http_get":    starlark.NewBuiltin("http_get", engine.netHTTPGet),
-		"dns_lookup":  starlark.NewBuiltin("dns_lookup", engine.netDNSLookup),
-		"reverse_dns": starlark.NewBuiltin("reverse_dns", engine.netReverseDNS),
-		"port_check":  starlark.NewBuiltin("port_check", engine.netPortCheck),
+		"http_get":     starlark.NewBuiltin("http_get", engine.netHTTPGet),
+		"http_post":    starlark.NewBuiltin("http_post", engine.netHTTPPost),
+		"http_request": starlark.NewBuiltin("http_request", engine.netHTTPRequest),
+		"dns_lookup":   starlark.NewBuiltin("dns_lookup", engine.netDNSLookup),
+		"reverse_dns":  starlark.NewBuiltin("reverse_dns", engine.netReverseDNS),
+		"port_check":   starlark.NewBuiltin("port_check", engine.netPortCheck),
 	}
 
 	// sys.exec
@@ -161,14 +163,80 @@ func (engine *Engine) buildSysModule() *starlarkstruct.Struct {
 		"listen": starlark.NewBuiltin("listen", engine.eventsListen),
 	}
 
-	// sys.packages (stub — wire apt/dnf/brew)
+	// sys.packages
 	sysPackages := starlark.StringDict{
-		"install": starlark.NewBuiltin("install", engine.packagesInstall),
+		"install": starlark.NewBuiltin("install", engine.packagesInstallReal),
+		"remove":  starlark.NewBuiltin("remove", engine.packagesRemove),
+		"update":  starlark.NewBuiltin("update", engine.packagesUpdate),
+		"upgrade": starlark.NewBuiltin("upgrade", engine.packagesUpgrade),
+		"list":    starlark.NewBuiltin("list", engine.packagesList),
+		"search":  starlark.NewBuiltin("search", engine.packagesSearch),
+		"backend": starlark.NewBuiltin("backend", engine.packagesBackend),
 	}
 
-	// sys.containers (stub — wire Docker SDK)
+	// sys.containers
 	sysContainers := starlark.StringDict{
-		"run": starlark.NewBuiltin("run", engine.containersRun),
+		"ps":      starlark.NewBuiltin("ps", engine.containersPS),
+		"start":   starlark.NewBuiltin("start", engine.containersStart),
+		"stop":    starlark.NewBuiltin("stop", engine.containersStop),
+		"restart": starlark.NewBuiltin("restart", engine.containersRestart),
+		"logs":    starlark.NewBuiltin("logs", engine.containersLogs),
+		"exec":    starlark.NewBuiltin("exec", engine.containersExec),
+		"pull":    starlark.NewBuiltin("pull", engine.containersPull),
+		"inspect": starlark.NewBuiltin("inspect", engine.containersInspect),
+		"run":     starlark.NewBuiltin("run", engine.containersRunReal),
+	}
+
+	// sys.disk
+	sysDisk := starlark.StringDict{
+		"usage":      starlark.NewBuiltin("usage", engine.diskUsage),
+		"partitions": starlark.NewBuiltin("partitions", engine.diskPartitions),
+		"io":         starlark.NewBuiltin("io", engine.diskIO),
+	}
+
+	// sys.network
+	sysNetwork := starlark.StringDict{
+		"interfaces":  starlark.NewBuiltin("interfaces", engine.networkInterfaces),
+		"io":          starlark.NewBuiltin("io", engine.networkIO),
+		"connections": starlark.NewBuiltin("connections", engine.networkConnections),
+		"routes":      starlark.NewBuiltin("routes", engine.networkRoutes),
+	}
+
+	// sys.accounts
+	sysAccounts := starlark.StringDict{
+		"list_users":   starlark.NewBuiltin("list_users", engine.accountsListUsers),
+		"list_groups":  starlark.NewBuiltin("list_groups", engine.accountsListGroups),
+		"add_user":     starlark.NewBuiltin("add_user", engine.accountsAddUser),
+		"del_user":     starlark.NewBuiltin("del_user", engine.accountsDelUser),
+		"add_group":    starlark.NewBuiltin("add_group", engine.accountsAddGroup),
+		"del_group":    starlark.NewBuiltin("del_group", engine.accountsDelGroup),
+		"set_password": starlark.NewBuiltin("set_password", engine.accountsSetPassword),
+		"id":           starlark.NewBuiltin("id", engine.accountsID),
+	}
+
+	// sys.cron
+	sysCron := starlark.StringDict{
+		"list":   starlark.NewBuiltin("list", engine.cronList),
+		"add":    starlark.NewBuiltin("add", engine.cronAdd),
+		"remove": starlark.NewBuiltin("remove", engine.cronRemove),
+		"write":  starlark.NewBuiltin("write", engine.cronWrite),
+	}
+
+	// sys.firewall
+	sysFirewall := starlark.StringDict{
+		"status": starlark.NewBuiltin("status", engine.firewallStatus),
+		"list":   starlark.NewBuiltin("list", engine.firewallList),
+		"allow":  starlark.NewBuiltin("allow", engine.firewallAllow),
+		"deny":   starlark.NewBuiltin("deny", engine.firewallDeny),
+		"delete": starlark.NewBuiltin("delete", engine.firewallDelete),
+	}
+
+	// sys.ssl
+	sysSSL := starlark.StringDict{
+		"inspect":           starlark.NewBuiltin("inspect", engine.sslInspect),
+		"inspect_file":      starlark.NewBuiltin("inspect_file", engine.sslInspectFile),
+		"days_until_expiry": starlark.NewBuiltin("days_until_expiry", engine.sslDaysUntilExpiry),
+		"verify":            starlark.NewBuiltin("verify", engine.sslVerify),
 	}
 
 	// sys.ssh
@@ -195,6 +263,12 @@ func (engine *Engine) buildSysModule() *starlarkstruct.Struct {
 		"events":     starlarkstruct.FromStringDict(starlark.String("events"), sysEvents),
 		"packages":   starlarkstruct.FromStringDict(starlark.String("packages"), sysPackages),
 		"containers": starlarkstruct.FromStringDict(starlark.String("containers"), sysContainers),
+		"disk":       starlarkstruct.FromStringDict(starlark.String("disk"), sysDisk),
+		"network":    starlarkstruct.FromStringDict(starlark.String("network"), sysNetwork),
+		"accounts":   starlarkstruct.FromStringDict(starlark.String("accounts"), sysAccounts),
+		"cron":       starlarkstruct.FromStringDict(starlark.String("cron"), sysCron),
+		"firewall":   starlarkstruct.FromStringDict(starlark.String("firewall"), sysFirewall),
+		"ssl":        starlarkstruct.FromStringDict(starlark.String("ssl"), sysSSL),
 	}
 
 	return starlarkstruct.FromStringDict(starlark.String("sys"), sysDict)

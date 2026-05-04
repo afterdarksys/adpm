@@ -58,36 +58,3 @@ func (engine *Engine) eventsListen(thread *starlark.Thread, b *starlark.Builtin,
 	return starlark.True, nil
 }
 
-// =============================================================================
-// sys.packages  — apt/dnf/brew stub
-// =============================================================================
-
-func (engine *Engine) packagesInstall(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name string
-	if err := starlark.UnpackArgs("install", args, kwargs, "name", &name); err != nil {
-		return starlark.None, err
-	}
-	if !engine.Entitlements.AllowExec {
-		return starlark.None, fmt.Errorf("security exception: exec entitlement required for packages.install")
-	}
-	log.Printf("[sysscript packages] install %s (stub)", name)
-	// TODO: detect apt/dnf/brew and run appropriate command
-	return starlark.True, nil
-}
-
-// =============================================================================
-// sys.containers  — Docker SDK stub
-// =============================================================================
-
-func (engine *Engine) containersRun(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var image string
-	if err := starlark.UnpackArgs("run", args, kwargs, "image", &image); err != nil {
-		return starlark.None, err
-	}
-	if !engine.Entitlements.AllowExec {
-		return starlark.None, fmt.Errorf("security exception: exec entitlement required for containers.run")
-	}
-	log.Printf("[sysscript containers] run %s (stub)", image)
-	// TODO: wire Docker SDK / containerd client
-	return starlark.True, nil
-}
