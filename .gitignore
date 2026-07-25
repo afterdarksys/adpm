@@ -1,0 +1,8 @@
+# Compiled Go CLI binary — rebuild with ./build.sh
+/adpm_cli
+
+# Default package build/output directory (internal/cmd/build.go, adpm-build.py)
+/adpm/
+
+# OS
+.DS_Store
