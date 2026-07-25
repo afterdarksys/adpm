@@ -5,8 +5,10 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,7 +195,7 @@ func (engine *Engine) sslInspect(thread *starlark.Thread, b *starlark.Builtin, a
 		timeoutMs = 10000
 	}
 	cfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec — intentional for inspection
-	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", host, port), cfg)
+	conn, err := tls.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)), cfg)
 	if err != nil {
 		return starlark.None, fmt.Errorf("ssl.inspect: %w", err)
 	}
@@ -235,7 +237,7 @@ func (engine *Engine) sslDaysUntilExpiry(thread *starlark.Thread, b *starlark.Bu
 		port = 443
 	}
 	cfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec
-	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", host, port), cfg)
+	conn, err := tls.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)), cfg)
 	if err != nil {
 		return starlark.None, fmt.Errorf("ssl.days_until_expiry: %w", err)
 	}
@@ -258,7 +260,7 @@ func (engine *Engine) sslVerify(thread *starlark.Thread, b *starlark.Builtin, ar
 		port = 443
 	}
 	// Use strict verification (no InsecureSkipVerify)
-	conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", host, port), &tls.Config{ServerName: host})
+	conn, err := tls.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)), &tls.Config{ServerName: host})
 	d := starlark.NewDict(2)
 	if err != nil {
 		d.SetKey(starlark.String("valid"), starlark.False)

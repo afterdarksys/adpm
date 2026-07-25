@@ -2,7 +2,9 @@ package sysscript
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	gopsnet "github.com/shirou/gopsutil/v3/net"
@@ -136,8 +138,8 @@ func (engine *Engine) networkConnections(thread *starlark.Thread, b *starlark.Bu
 		d.SetKey(starlark.String("fd"), starlark.MakeInt(int(c.Fd)))
 		d.SetKey(starlark.String("family"), starlark.MakeInt(int(c.Family)))
 		d.SetKey(starlark.String("type"), starlark.MakeInt(int(c.Type)))
-		d.SetKey(starlark.String("laddr"), starlark.String(fmt.Sprintf("%s:%d", c.Laddr.IP, c.Laddr.Port)))
-		d.SetKey(starlark.String("raddr"), starlark.String(fmt.Sprintf("%s:%d", c.Raddr.IP, c.Raddr.Port)))
+		d.SetKey(starlark.String("laddr"), starlark.String(net.JoinHostPort(c.Laddr.IP, strconv.Itoa(int(c.Laddr.Port)))))
+		d.SetKey(starlark.String("raddr"), starlark.String(net.JoinHostPort(c.Raddr.IP, strconv.Itoa(int(c.Raddr.Port)))))
 		d.SetKey(starlark.String("status"), starlark.String(c.Status))
 		d.SetKey(starlark.String("pid"), starlark.MakeInt(int(c.Pid)))
 		results = append(results, d)

@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"go.starlark.net/starlark"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // =============================================================================
@@ -31,7 +34,9 @@ import (
 //     → {success, error}
 //
 // Auth priority: explicit key file → SSH_AUTH_SOCK agent → ~/.ssh/id_ed25519 → ~/.ssh/id_rsa
-// Host key checking: InsecureIgnoreHostKey (automation default; add known_hosts support as needed)
+// Host key checking: verified against Entitlements.SSHKnownHostsFile (default
+// ~/.ssh/known_hosts). A host with no matching entry is refused unless it is
+// explicitly listed in Entitlements.AllowInsecureSSHHostKey.
 // =============================================================================
 
 func (engine *Engine) sshAllowed(host string) bool {
@@ -43,8 +48,38 @@ func (engine *Engine) sshAllowed(host string) bool {
 	return false
 }
 
+// sshHostKeyCallback returns the ssh.HostKeyCallback to use for host. Unless
+// host is explicitly allow-listed for insecure connections, the returned
+// callback verifies against the configured (or default) known_hosts file and
+// rejects unknown or mismatched host keys.
+func (engine *Engine) sshHostKeyCallback(host string) (ssh.HostKeyCallback, error) {
+	for _, h := range engine.Entitlements.AllowInsecureSSHHostKey {
+		if h == "*" || h == host {
+			return ssh.InsecureIgnoreHostKey(), nil //nolint:gosec — explicit per-host opt-out
+		}
+	}
+
+	knownHostsPath := engine.Entitlements.SSHKnownHostsFile
+	if knownHostsPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("ssh: cannot resolve home directory for known_hosts: %w", err)
+		}
+		knownHostsPath = filepath.Join(home, ".ssh", "known_hosts")
+	}
+
+	callback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"ssh: load known_hosts %s: %w (add %q to known_hosts, set entitlements.ssh_known_hosts_file, or explicitly allow-list %q under allow_insecure_ssh_host_key)",
+			knownHostsPath, err, host, host,
+		)
+	}
+	return callback, nil
+}
+
 // sshConnect builds and dials an SSH client.
-func sshConnect(host, user, keyPath, password string, port, timeoutMs int) (*ssh.Client, error) {
+func (engine *Engine) sshConnect(host, user, keyPath, password string, port, timeoutMs int) (*ssh.Client, error) {
 	if user == "" {
 		user = "root"
 	}
@@ -99,14 +134,19 @@ func sshConnect(host, user, keyPath, password string, port, timeoutMs int) (*ssh
 		authMethods = append(authMethods, ssh.Password(password))
 	}
 
+	hostKeyCallback, err := engine.sshHostKeyCallback(host)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec — automation default
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         time.Duration(timeoutMs) * time.Millisecond,
 	}
 
-	return ssh.Dial("tcp", fmt.Sprintf("%s:%d", host, port), cfg)
+	return ssh.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)), cfg)
 }
 
 // --- sys.ssh.run ---
@@ -126,7 +166,7 @@ func (engine *Engine) sshRun(thread *starlark.Thread, b *starlark.Builtin, args 
 		return sshErrResult(fmt.Sprintf("security exception: SSH to %s not granted", host)), nil
 	}
 
-	client, err := sshConnect(host, user, key, password, port, timeoutMs)
+	client, err := engine.sshConnect(host, user, key, password, port, timeoutMs)
 	if err != nil {
 		return sshErrResult(err.Error()), nil
 	}
@@ -177,7 +217,7 @@ func (engine *Engine) sshCopyTo(thread *starlark.Thread, b *starlark.Builtin, ar
 		return sshOkResult(false, fmt.Sprintf("security exception: SSH to %s not granted", host)), nil
 	}
 
-	client, err := sshConnect(host, user, key, password, port, 0)
+	client, err := engine.sshConnect(host, user, key, password, port, 0)
 	if err != nil {
 		return sshOkResult(false, err.Error()), nil
 	}
@@ -223,7 +263,7 @@ func (engine *Engine) sshCopyFrom(thread *starlark.Thread, b *starlark.Builtin, 
 		return sshOkResult(false, fmt.Sprintf("security exception: SSH to %s not granted", host)), nil
 	}
 
-	client, err := sshConnect(host, user, key, password, port, 0)
+	client, err := engine.sshConnect(host, user, key, password, port, 0)
 	if err != nil {
 		return sshOkResult(false, err.Error()), nil
 	}
@@ -270,7 +310,7 @@ func (engine *Engine) sshWrite(thread *starlark.Thread, b *starlark.Builtin, arg
 		return sshOkResult(false, fmt.Sprintf("security exception: SSH to %s not granted", host)), nil
 	}
 
-	client, err := sshConnect(host, user, key, password, port, 0)
+	client, err := engine.sshConnect(host, user, key, password, port, 0)
 	if err != nil {
 		return sshOkResult(false, err.Error()), nil
 	}

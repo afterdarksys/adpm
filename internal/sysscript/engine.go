@@ -24,6 +24,15 @@ type Entitlements struct {
 	AllowConfigWrite   []string `json:"allow_config_write"`   // paths allowed for atomic config writes
 	AllowServiceReload []string `json:"allow_service_reload"` // service names allowed to reload
 	AllowSSH           []string `json:"allow_ssh"`            // hosts/IPs allowed for sys.ssh (supports *)
+
+	// SSHKnownHostsFile is consulted for host key verification on every
+	// sys.ssh connection. Defaults to ~/.ssh/known_hosts when empty. A host
+	// with no matching known_hosts entry is refused unless explicitly listed
+	// in AllowInsecureSSHHostKey.
+	SSHKnownHostsFile string `json:"ssh_known_hosts_file"`
+	// AllowInsecureSSHHostKey lists hosts/IPs (supports *) permitted to skip
+	// host key verification. Empty by default — verification is required.
+	AllowInsecureSSHHostKey []string `json:"allow_insecure_ssh_host_key"`
 }
 
 // Engine wraps Starlark execution with a full sys.* API surface.
