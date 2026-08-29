@@ -47,7 +47,7 @@ BINARY_NAME=""
 BINS_DIR=""
 OUTPUT_DIR="dist"
 MAINTAINER="AfterDark Systems <support@afterdarksys.com>"
-DESCRIPTION="AfterDark package"
+DESCRIPTION="After Dark Systems package"
 HOMEPAGE="https://afterdarksys.com"
 LICENSE="Proprietary"
 

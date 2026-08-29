@@ -1,5 +1,5 @@
 #!/bin/bash
-# ADPM Installer - AfterDark Package Manager Installer
+# ADPM Installer - After Dark Systems Package Manager Installer
 # Homage to Todd Bennett III, unixeng
 #
 # Usage:
@@ -13,7 +13,7 @@
 
 set -e
 
-ADPM_VERSION="0.2.0"
+ADPM_VERSION="0.3.0"
 INSTALL_PREFIX="${ADPM_PREFIX:-$HOME/.local}"
 ADPM_DB="${ADPM_DB:-$HOME/.local/share/adpm}"  # Package registry
 TEMP_DIR=$(mktemp -d -t adpm.XXXXXX)
@@ -98,26 +98,37 @@ extract_archive() {
         file_type=$(file "$archive_file" 2>/dev/null)
     fi
 
-    # Pre-flight Path Traversal (Zip Slip) check
-    local list_cmd=""
-    if echo "$file_type" | grep -qi "xz" || xz -t "$archive_file" 2>/dev/null; then
-        list_cmd="unxz -c \"$archive_file\" | cpio -it 2>/dev/null"
-        extract_cmd="unxz -c \"$archive_file\" | (cd \"$extract_dir\" && cpio -idm --quiet 2>/dev/null)"
+    # Pre-flight path and symlink traversal check. Avoid eval so package paths
+    # containing shell metacharacters remain data, never commands.
+    local compression="bzip2"
+    if echo "$file_type" | grep -qi "zstandard" || (command -v zstd >/dev/null 2>&1 && zstd -t "$archive_file" >/dev/null 2>&1); then
+        compression="zstd"
+    elif echo "$file_type" | grep -qi "xz" || xz -t "$archive_file" 2>/dev/null; then
+        compression="xz"
     elif echo "$file_type" | grep -qi "gzip" || gzip -t "$archive_file" 2>/dev/null; then
-        list_cmd="gunzip -c \"$archive_file\" | cpio -it 2>/dev/null"
-        extract_cmd="gunzip -c \"$archive_file\" | (cd \"$extract_dir\" && cpio -idm --quiet 2>/dev/null)"
-    else
-        # Default to bzip2 as per original code
-        list_cmd="bunzip2 -c \"$archive_file\" | cpio -it 2>/dev/null"
-        extract_cmd="bunzip2 -c \"$archive_file\" | (cd \"$extract_dir\" && cpio -idm --quiet 2>/dev/null)"
+        compression="gzip"
     fi
 
-    if eval "$list_cmd" | grep -qE '^/|\.\./'; then
+    local contents_file="$extract_dir/.adpm-contents"
+    case "$compression" in
+        zstd) zstd -dc "$archive_file" | cpio -itv > "$contents_file" 2>/dev/null ;;
+        xz)    unxz -c "$archive_file" | cpio -itv > "$contents_file" 2>/dev/null ;;
+        gzip)  gunzip -c "$archive_file" | cpio -itv > "$contents_file" 2>/dev/null ;;
+        *)     bunzip2 -c "$archive_file" | cpio -itv > "$contents_file" 2>/dev/null ;;
+    esac || { log_error "Invalid or unsupported package archive"; exit 1; }
+
+    if grep -qE '(^| -> )/|\.\./' "$contents_file"; then
         log_error "SECURITY VIOLATION: Archive contains absolute paths or directory traversal (../) payloads!"
         exit 1
     fi
+    rm -f "$contents_file"
 
-    eval "$extract_cmd"
+    case "$compression" in
+        zstd) zstd -dc "$archive_file" | (cd "$extract_dir" && cpio -idm --quiet 2>/dev/null) ;;
+        xz)    unxz -c "$archive_file" | (cd "$extract_dir" && cpio -idm --quiet 2>/dev/null) ;;
+        gzip)  gunzip -c "$archive_file" | (cd "$extract_dir" && cpio -idm --quiet 2>/dev/null) ;;
+        *)     bunzip2 -c "$archive_file" | (cd "$extract_dir" && cpio -idm --quiet 2>/dev/null) ;;
+    esac || { log_error "Package extraction failed"; exit 1; }
 
     if is_self_extracting; then
         rm -f "$archive_file"
@@ -135,12 +146,73 @@ read_metadata() {
     PACKAGE_VERSION=$(grep '"version"' "$meta_file" | head -1 | cut -d'"' -f4)
 
     # Validate package name to prevent local file overwrite attacks
-    if [[ "$PACKAGE_NAME" == *"/"* ]] || [[ "$PACKAGE_NAME" == *".."* ]] || [[ "$PACKAGE_VERSION" == *"/"* ]]; then
+    if ! [[ "$PACKAGE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] ||
+       ! [[ "$PACKAGE_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+:-]*$ ]]; then
         log_error "SECURITY VIOLATION: Invalid package name or version!"
         exit 1
     fi
 
     log_info "Package: ${BOLD}${PACKAGE_NAME} v${PACKAGE_VERSION}${NC}"
+}
+
+# Resolve declared ADPM dependencies against the local package database.
+check_dependencies() {
+    local meta_file="$TEMP_DIR/META.json"
+    command -v python3 >/dev/null 2>&1 || {
+        log_warn "python3 unavailable; cannot evaluate package dependencies"
+        return 0
+    }
+    python3 - "$meta_file" "$ADPM_DB/installed" <<'PY'
+import json, operator, pathlib, re, sys
+
+meta = json.load(open(sys.argv[1]))
+db = pathlib.Path(sys.argv[2])
+failed = []
+
+def version(value):
+    parts = [(0, int(x)) if x.isdigit() else (1, x.lower())
+             for x in re.split(r"[._+-]", value)]
+    while parts and parts[-1] == (0, 0):
+        parts.pop()
+    return tuple(parts)
+
+for name, spec in meta.get("dependencies", {}).items():
+    if not isinstance(spec, dict) or spec.get("type") == "python":
+        continue
+    record = db / (name + ".json")
+    if not record.exists():
+        failed.append(f"missing dependency: {name}")
+        continue
+    installed = str(json.load(open(record)).get("version", ""))
+    constraint = str(spec.get("version", "*")).strip()
+    if constraint in ("", "*", "latest"):
+        continue
+    match = re.match(r"^(>=|<=|==|=|>|<)?\s*(.+)$", constraint)
+    op, wanted = match.groups()
+    op = op or "="
+    comparisons = {"=": operator.eq, "==": operator.eq, ">=": operator.ge,
+                   "<=": operator.le, ">": operator.gt, "<": operator.lt}
+    if not comparisons[op](version(installed), version(wanted)):
+        failed.append(f"version conflict: {name} {installed} does not satisfy {constraint}")
+
+if failed:
+    for failure in failed:
+        print("[ERR]  " + failure, file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+check_platform() {
+    local platform="$1"
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 - "$TEMP_DIR/META.json" "$platform" <<'PY'
+import json, sys
+platforms = json.load(open(sys.argv[1])).get("platforms", [])
+current = sys.argv[2]
+if platforms and current not in platforms and "all" not in platforms and "platform-agnostic" not in platforms:
+    print(f"[ERR]  package supports {', '.join(platforms)}, not {current}", file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 # ── Package DB ────────────────────────────────────────────────
@@ -187,6 +259,53 @@ db_list_installed() {
     echo ""
 }
 
+create_rollback_snapshot() {
+    local name="$1"
+    local record="$ADPM_DB/installed/${name}.json"
+    local snapshot="$ADPM_DB/rollback/$name"
+    [ -f "$record" ] || return 0
+    python3 - "$record" "$snapshot" <<'PY'
+import json, pathlib, shutil, sys
+record_path, snapshot = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+if snapshot.exists():
+    shutil.rmtree(snapshot)
+(snapshot / "files").mkdir(parents=True)
+record = json.load(open(record_path))
+manifest = []
+for index, target in enumerate(record.get("files", [])):
+    source = pathlib.Path(target)
+    if source.is_file():
+        backup = snapshot / "files" / str(index)
+        shutil.copy2(source, backup)
+        manifest.append({"target": str(source), "backup": str(backup)})
+json.dump(record, open(snapshot / "record.json", "w"), indent=2)
+json.dump(manifest, open(snapshot / "manifest.json", "w"), indent=2)
+PY
+}
+
+rollback_package() {
+    local name="$1"
+    PACKAGE_NAME="$name"
+    local snapshot="$ADPM_DB/rollback/$name"
+    [ -f "$snapshot/record.json" ] || { log_error "No rollback snapshot for '$name'"; exit 1; }
+    python3 - "$name" "$ADPM_DB" "$snapshot" <<'PY'
+import json, pathlib, shutil, sys
+name, db, snapshot = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+current = db / "installed" / (name + ".json")
+if current.exists():
+    for target in json.load(open(current)).get("files", []):
+        path = pathlib.Path(target)
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+for item in json.load(open(snapshot / "manifest.json")):
+    target = pathlib.Path(item["target"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(item["backup"], target)
+shutil.copy2(snapshot / "record.json", current)
+PY
+    log_success "Rolled '$name' back to the previous installed version"
+}
+
 # ── Verification ──────────────────────────────────────────────
 verify_signature() {
     local archive_file="$1"
@@ -216,6 +335,28 @@ verify_signature() {
         log_error "Signature verification FAILED!"
         exit 1
     fi
+}
+
+verify_checksum() {
+    local archive_file="$1"
+    local required="$2"
+    local checksum_file="${archive_file}.sha256"
+    if [ ! -f "$checksum_file" ]; then
+        [ "$required" = "1" ] && { log_error "Checksum file missing ($checksum_file)"; exit 1; }
+        return 0
+    fi
+    local expected actual
+    expected=$(awk 'NR == 1 {print $1}' "$checksum_file")
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$archive_file" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$archive_file" | awk '{print $1}')
+    else
+        log_error "No SHA-256 utility available"
+        exit 1
+    fi
+    [ "$expected" = "$actual" ] || { log_error "SHA-256 checksum verification FAILED"; exit 1; }
+    log_success "SHA-256 checksum verified"
 }
 
 # ── Install ───────────────────────────────────────────────────
@@ -252,6 +393,44 @@ install_package() {
             log_success "  $(basename "$lib")"
             installed_files="${installed_files}\"$INSTALL_PREFIX/lib/$(basename "$lib")\","
         done
+    fi
+
+    # Converted native packages retain non-bin/lib files under payload/. Map
+    # usr/ into the selected prefix so user and system installs stay isolated.
+    local payload_dir="$TEMP_DIR/payload/$platform"
+    if [ -d "$payload_dir" ] && command -v python3 >/dev/null 2>&1; then
+        log_info "Installing preserved package payload → $INSTALL_PREFIX"
+        while IFS= read -r installed; do
+            [ -n "$installed" ] && installed_files="${installed_files}\"${installed}\","
+        done < <(python3 - "$payload_dir" "$INSTALL_PREFIX" <<'PY'
+import os, pathlib, shutil, sys
+source, prefix = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+def mapped(relative):
+    parts = relative.parts
+    if parts[:2] == ("usr", "local"):
+        relative = pathlib.Path(*parts[2:])
+    elif parts[:1] == ("usr",):
+        relative = pathlib.Path(*parts[1:])
+    return prefix / relative
+
+for item in source.rglob("*"):
+    if item.is_dir():
+        continue
+    relative = item.relative_to(source)
+    target = mapped(relative)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if item.is_symlink():
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        source_target = (item.parent / os.readlink(item)).resolve()
+        source_relative = source_target.relative_to(source.resolve())
+        target.symlink_to(os.path.relpath(mapped(source_relative), target.parent))
+    else:
+        shutil.copyfile(item, target)
+        target.chmod(item.stat().st_mode & 0o777)
+    print(target)
+PY
+)
     fi
 
     # Python packages
@@ -345,6 +524,11 @@ upgrade_package() {
 
     extract_archive "$archive" "$TEMP_DIR"
     read_metadata
+    check_dependencies || { log_error "Dependency resolution failed"; exit 1; }
+    local platform
+    platform=$(detect_platform)
+    [ "$platform" = "unknown" ] && { log_error "Unsupported platform"; exit 1; }
+    check_platform "$platform" || { log_error "Package is incompatible with this platform"; exit 1; }
 
     local existing
     existing=$(db_get_installed "$PACKAGE_NAME")
@@ -352,6 +536,7 @@ upgrade_package() {
         local old_version
         old_version=$(echo "$existing" | grep '"version"' | cut -d'"' -f4)
         log_info "Upgrading $PACKAGE_NAME: v$old_version → v$PACKAGE_VERSION"
+        create_rollback_snapshot "$PACKAGE_NAME"
         uninstall_package "$PACKAGE_NAME"
     else
         log_info "No existing installation found — performing fresh install"
@@ -359,9 +544,6 @@ upgrade_package() {
 
     # Re-extract (uninstall_package cleanup already happened)
     # We already extracted above, so just install
-    local platform
-    platform=$(detect_platform)
-    [ "$platform" = "unknown" ] && { log_error "Unsupported platform"; exit 1; }
     install_package "$platform"
 }
 
@@ -413,6 +595,10 @@ main() {
             [ -z "${2:-}" ] && { log_error "Usage: $0 --upgrade package.adpm"; exit 1; }
             mode="upgrade"
             ;;
+        --rollback)
+            [ -z "${2:-}" ] && { log_error "Usage: $0 --rollback PACKAGE"; exit 1; }
+            mode="rollback"
+            ;;
         --help|-h)
             echo "ADPM Installer v$ADPM_VERSION"
             echo ""
@@ -420,6 +606,7 @@ main() {
             echo "  $0 package.adpm               # Install package"
             echo "  $0 --uninstall PACKAGE        # Uninstall package"
             echo "  $0 --upgrade package.adpm     # Upgrade package"
+            echo "  $0 --rollback PACKAGE         # Restore version saved by last upgrade"
             echo "  $0 --list                     # List installed packages"
             echo "  $0 --system package.adpm      # Install system-wide (requires root)"
             echo "  $0 --verify package.adpm      # Verify package signature before install"
@@ -434,7 +621,7 @@ main() {
     esac
 
     echo "============================================"
-    echo "  ADPM - AfterDark Package Manager v$ADPM_VERSION"
+    echo "  ADPM - After Dark Systems Package Manager v$ADPM_VERSION"
     echo "  Homage to Todd Bennett III, unixeng"
     echo "============================================"
     echo ""
@@ -445,8 +632,14 @@ main() {
             exit 0
             ;;
         upgrade)
-            [ "$verify" -eq 1 ] && verify_signature "$2" "$verify_req"
+            if [ "$verify" -eq 1 ]; then
+                verify_checksum "$2" "$verify_req"
+                verify_signature "$2" "$verify_req"
+            fi
             upgrade_package "$2"
+            ;;
+        rollback)
+            rollback_package "$2"
             ;;
         install)
             local target_arch=""
@@ -458,12 +651,15 @@ main() {
             fi
             
             if [ -n "$target_arch" ] && [ "$verify" -eq 1 ]; then
+                verify_checksum "$target_arch" "$verify_req"
                 verify_signature "$target_arch" "$verify_req"
             fi
             
             extract_archive "$target_arch" "$TEMP_DIR"
 
             read_metadata
+
+            check_dependencies || { log_error "Dependency resolution failed"; exit 1; }
 
             local platform
             platform=$(detect_platform)
@@ -475,6 +671,8 @@ main() {
             log_info "Platform: $platform"
             log_info "Prefix:   $INSTALL_PREFIX"
             echo ""
+
+            check_platform "$platform" || { log_error "Package is incompatible with this platform"; exit 1; }
 
             install_package "$platform"
             ;;
@@ -491,7 +689,7 @@ main() {
     echo "  export PATH=\"$INSTALL_PREFIX/bin:\$PATH\""
     echo ""
     echo "To uninstall later:"
-    echo "  adpm-install.sh --uninstall $PACKAGE_NAME"
+    echo "  adpm install --uninstall $PACKAGE_NAME"
     echo ""
 }
 

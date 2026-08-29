@@ -25,7 +25,7 @@ Last Updated: 2026-03-12
 
 ## Overview
 
-ADPM (AfterDark Package Manager) currently provides cross-platform binary distribution with self-extracting installers. To become enterprise-ready, ADPM needs to address:
+ADPM (After Dark Systems Package Manager) currently provides cross-platform binary distribution with self-extracting installers. To become enterprise-ready, ADPM needs to address:
 
 - **Security**: Signing, verification, vulnerability scanning
 - **Scale**: Registry infrastructure, CDN distribution, mirroring

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Public `adpm <command> [options]` CLI for After Dark Systems Package Manager
+- Bidirectional RPM, DEB, TGZ, BPM, ADPM, and CPIO conversion
+- `inspect`, `validate`, and multi-platform `merge` commands
+- Dependency constraint checks during install and upgrade
+- Secure native tar and CPIO extraction with traversal protection
+- Recursive ELF/Mach-O dependency detection and non-system library bundling
+- Linux `patchelf` RPATH and macOS `install_name_tool` relocation
+- Builder unit, conversion-matrix, and installer lifecycle test suites
 - Initial ADPM package manager implementation
 - `adpm-build.py` - Package builder script
 - `adpm-install.sh` - Package installer script

@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/afterdarksys/adpm/internal/pkgarchive"
 	"github.com/spf13/cobra"
 )
 
@@ -99,46 +100,46 @@ var generateRepoCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Found %d valid packages. Writing index...\n", len(catalog.Packages))
-		
+
 		indexPath := filepath.Join(targetDir, "index.json")
-		
+
 		catalogBytes, err := json.MarshalIndent(catalog, "", "  ")
 		if err != nil {
 			fmt.Printf("Error generating JSON: %v\n", err)
 			os.Exit(1)
 		}
-		
+
 		if err := os.WriteFile(indexPath, catalogBytes, 0644); err != nil {
 			fmt.Printf("Error writing index.json: %v\n", err)
 			os.Exit(1)
 		}
-		
+
 		fmt.Printf("✓ Created repository catalog: %s\n", indexPath)
-		
+
 		if sign {
 			fmt.Println("Signing index.json with GPG...")
-			
+
 			// Remove old signature if it exists
 			sigPath := indexPath + ".asc"
 			os.Remove(sigPath)
-			
+
 			gpgArgs := []string{"gpg", "--detach-sign", "--armor"}
 			if key != "" {
 				gpgArgs = append(gpgArgs, "--default-key", key)
 			}
 			gpgArgs = append(gpgArgs, indexPath)
-			
+
 			gpgCmd := exec.Command(gpgArgs[0], gpgArgs[1:]...)
 			gpgCmd.Stdout = os.Stdout
 			gpgCmd.Stderr = os.Stderr
-			
+
 			if err := gpgCmd.Run(); err != nil {
 				fmt.Printf("Warning: Failed to sign index.json. Is GPG configured?\n")
 			} else {
 				fmt.Printf("✓ Created cryptographic signature: %s\n", sigPath)
 			}
 		}
-		
+
 		fmt.Println("Repository generation complete!")
 	},
 }
@@ -167,20 +168,10 @@ func processPackage(archivePath string) *PackageEntry {
 	}
 	defer os.RemoveAll(tempDir)
 
-	extractHelper := `
-ARCHIVE="$1"
-if file "$ARCHIVE" | grep -qi "xz" || xz -t "$ARCHIVE" 2>/dev/null; then
-	unxz -c "$ARCHIVE" | cpio -idm --quiet 2>/dev/null
-elif file "$ARCHIVE" | grep -qi "gzip" || gzip -t "$ARCHIVE" 2>/dev/null; then
-	gunzip -c "$ARCHIVE" | cpio -idm --quiet 2>/dev/null
-else
-	bunzip2 -c "$ARCHIVE" | cpio -idm --quiet 2>/dev/null
-fi
-`
-
-	extractCmd := exec.Command("bash", "-c", extractHelper, "bash", archivePath)
-	extractCmd.Dir = tempDir
-	extractCmd.Run() // Ignore errors, it might partially extract which is fine if META is there
+	if err := pkgarchive.ExtractAuto(archivePath, tempDir); err != nil {
+		fmt.Printf("    Warning: Could not safely extract package: %v\n", err)
+		return nil
+	}
 
 	metaPath := filepath.Join(tempDir, "META.json")
 	if _, err := os.Stat(metaPath); err != nil {
@@ -222,7 +213,7 @@ fi
 	if _, err := os.Stat(sigPath); err == nil {
 		entry.Signature = filepath.Base(sigPath)
 	}
-	
+
 	// Example hook for extracting timestamps if they exist in metadata
 	// Currently ADPM doesn't inject built_at natively, but we could shim it
 	// For now we leave ScannedAt and BuiltAt empty unless injected elsewhere

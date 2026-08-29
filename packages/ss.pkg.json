@@ -40,5 +40,5 @@
     "doc": "README"
   },
 
-  "_comment": "Run: adpm/release.sh --pkg adpm/packages/ss.pkg.json 0.3.1 --source /path/to/secretserver.io"
+  "_comment": "Run: ./release.sh --pkg packages/ss.pkg.json 0.3.1 --source /path/to/secretserver.io"
 }

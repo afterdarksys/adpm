@@ -1,28 +1,28 @@
 # TODO
 
 ## Core Features
-- [ ] Multi-platform merge tool to combine separate platform builds into single .adpm
-- [ ] Dependency resolution between multiple ADPM packages
+- [x] Multi-platform merge tool to combine separate platform builds into single .adpm
+- [x] Dependency checks and version constraint detection for installed ADPM packages
 - [ ] Delta updates using binary diffs for package updates
-- [ ] GPG signature verification for security
+- [x] GPG signature and SHA-256 verification for security
 
 ## Repository & Distribution
 - [ ] Central package repository
 - [ ] Auto-build farm for all supported platforms
-- [ ] Package search and discovery tools
-- [ ] Version conflict detection and resolution
+- [x] Package search and discovery tools for local catalogs
+- [x] Installed dependency version conflict detection
 
 ## Builder Improvements
-- [ ] Automatic dependency detection for binaries
-- [ ] RPATH/loader path rewriting for relocated libraries
-- [ ] Strip debug symbols option to reduce size
-- [ ] Compression options (xz, zstd support)
+- [x] Automatic recursive dependency detection for ELF and Mach-O binaries
+- [x] RPATH/install-name rewriting for relocated Linux and macOS libraries
+- [x] Strip debug symbols option to reduce size
+- [x] Compression options (bzip2, gzip, xz, zstd), including modern DEB payload input
 
 ## Installer Enhancements
-- [ ] Rollback/uninstall functionality
-- [ ] Upgrade existing installations
-- [ ] System-wide installation option
-- [ ] Package verification before installation
+- [x] Uninstall plus one-generation rollback snapshots for upgrades
+- [x] Upgrade existing installations
+- [x] System-wide installation option
+- [x] Package verification before installation
 
 ## Documentation
 - [ ] Complete API documentation
@@ -31,7 +31,9 @@
 - [ ] Platform-specific build guides
 
 ## Testing
-- [ ] Unit tests for builder
-- [ ] Integration tests for installer
+- [x] Unit tests for builder
+- [x] Integration tests for install, upgrade, rollback, dependency, verification, and platform rejection
 - [ ] Cross-platform testing automation
-- [ ] Package validation tools
+- [x] Package validation and inspection tools
+- [x] Archive round-trip and traversal-security unit tests
+- [x] Portable and native conversion-matrix tests

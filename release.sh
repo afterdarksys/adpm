@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════
-#   ADPM — AfterDark Package Manager Release Script
+#   ADPM — After Dark Systems Package Manager Release Script
 #   Homage to Todd Bennett III, unixeng
 #
 #   Usage:
@@ -12,7 +12,7 @@
 #     .zip           Windows GitHub Releases
 #     .deb           Debian / Ubuntu
 #     .rpm           RHEL / Fedora / CentOS
-#     .adpm          AfterDark Package Manager (self-extracting)
+#     .adpm          After Dark Systems Package Manager (self-extracting)
 #     installer-*    ADPM self-extracting installers per platform
 #
 #   Publishes to:
@@ -120,7 +120,7 @@ PYEOF
 # ── Banner ────────────────────────────────────────────────────
 echo ""
 echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   📦 ADPM — AfterDark Package Manager Release Script${NC}"
+echo -e "${BLUE}   📦 ADPM — After Dark Systems Package Manager Release Script${NC}"
 echo -e "${BLUE}   Homage to Todd Bennett III, unixeng${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
 echo ""

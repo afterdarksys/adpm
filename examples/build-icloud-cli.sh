@@ -7,7 +7,7 @@ set -e
 # Configuration
 PACKAGE_NAME="icloud-cli-full"
 PACKAGE_VERSION="0.1.0"
-OUTPUT_DIR="adpm/packages"
+OUTPUT_DIR="dist"
 
 # Detect platform
 detect_platform() {
@@ -150,7 +150,7 @@ INSTALLER_FILE="icloud-cli-installer-$PLATFORM"
 if [ -f "$ADPM_FILE" ]; then
     echo
     echo "Creating self-extracting installer..."
-    ./adpm/builder/make-self-extracting.sh "$ADPM_FILE" "$INSTALLER_FILE"
+    ./builder/make-self-extracting.sh "$ADPM_FILE" "$INSTALLER_FILE"
 
     echo
     echo "✓ Build complete!"
@@ -159,7 +159,7 @@ if [ -f "$ADPM_FILE" ]; then
     echo "Installer: $INSTALLER_FILE"
     echo
     echo "Distribution options:"
-    echo "  1. Share .adpm file: Users run: ./adpm/installer/adpm-install.sh $ADPM_FILE"
+    echo "  1. Share .adpm file: Users run: adpm install $ADPM_FILE"
     echo "  2. Share installer: Users run: ./$INSTALLER_FILE"
     echo
 fi

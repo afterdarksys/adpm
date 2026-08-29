@@ -11,15 +11,21 @@ import (
 var installCmd = &cobra.Command{
 	Use:   "install [archive]",
 	Short: "Install, uninstall, or list ADPM packages",
-	Run: func(cmd *cobra.Command, args []string) {
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
 		list, _ := cmd.Flags().GetBool("list")
 		uninstall, _ := cmd.Flags().GetString("uninstall")
 		upgrade, _ := cmd.Flags().GetString("upgrade")
+		rollback, _ := cmd.Flags().GetString("rollback")
 		system, _ := cmd.Flags().GetBool("system")
 		verify, _ := cmd.Flags().GetBool("verify")
 		verifyReq, _ := cmd.Flags().GetBool("verify-required")
 
-		execArgs := []string{"installer/adpm-install.sh"}
+		installerPath, err := supportPath("installer/adpm-install.sh")
+		if err != nil {
+			return err
+		}
+		execArgs := []string{installerPath}
 
 		if list {
 			execArgs = append(execArgs, "--list")
@@ -27,11 +33,11 @@ var installCmd = &cobra.Command{
 			execArgs = append(execArgs, "--uninstall", uninstall)
 		} else if upgrade != "" {
 			execArgs = append(execArgs, "--upgrade", upgrade)
+		} else if rollback != "" {
+			execArgs = append(execArgs, "--rollback", rollback)
 		} else {
 			if len(args) == 0 {
-				fmt.Println("Error: must specify a package archive to install or an action flag.")
-				cmd.Help()
-				os.Exit(1)
+				return fmt.Errorf("must specify a package archive or an action flag")
 			}
 			execArgs = append(execArgs, args[0])
 		}
@@ -50,9 +56,9 @@ var installCmd = &cobra.Command{
 		execCmd.Stderr = os.Stderr
 
 		if err := execCmd.Run(); err != nil {
-			fmt.Printf("Install operation failed: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("install operation failed: %w", err)
 		}
+		return nil
 	},
 }
 
@@ -62,6 +68,7 @@ func init() {
 	installCmd.Flags().Bool("list", false, "List installed packages")
 	installCmd.Flags().String("uninstall", "", "Uninstall package by name")
 	installCmd.Flags().String("upgrade", "", "Upgrade package from archive")
+	installCmd.Flags().String("rollback", "", "Restore the package snapshot saved by its last upgrade")
 	installCmd.Flags().Bool("system", false, "Install system-wide (requires root)")
 	installCmd.Flags().Bool("verify", false, "Verify package GPG signature before install")
 	installCmd.Flags().Bool("verify-required", false, "Strictly verify package GPG signature (fails if missing)")

@@ -11,7 +11,7 @@ import (
 var buildCmd = &cobra.Command{
 	Use:   "build",
 	Short: "Build an ADPM package using adpm-build.py",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
 		version, _ := cmd.Flags().GetString("version")
 		out, _ := cmd.Flags().GetString("output")
@@ -21,17 +21,23 @@ var buildCmd = &cobra.Command{
 		sign, _ := cmd.Flags().GetBool("sign")
 		key, _ := cmd.Flags().GetString("key")
 		sbom, _ := cmd.Flags().GetBool("generate-sbom")
+		detectDependencies, _ := cmd.Flags().GetBool("detect-dependencies")
+		relocate, _ := cmd.Flags().GetBool("relocate")
 
 		binaries, _ := cmd.Flags().GetStringSlice("binaries")
 		libraries, _ := cmd.Flags().GetStringSlice("libraries")
 		pythonPkgs, _ := cmd.Flags().GetStringSlice("python")
+		dependencies, _ := cmd.Flags().GetStringArray("dependency")
 
 		if name == "" || version == "" {
-			fmt.Println("Error: --name and --version are required")
-			os.Exit(1)
+			return fmt.Errorf("--name and --version are required")
 		}
 
-		buildArgs := []string{"builder/adpm-build.py", "--name", name, "--version", version}
+		builderPath, err := supportPath("builder/adpm-build.py")
+		if err != nil {
+			return err
+		}
+		buildArgs := []string{builderPath, "--name", name, "--version", version}
 		if out != "" {
 			buildArgs = append(buildArgs, "--output", out)
 		}
@@ -53,6 +59,12 @@ var buildCmd = &cobra.Command{
 		if sbom {
 			buildArgs = append(buildArgs, "--generate-sbom")
 		}
+		if detectDependencies {
+			buildArgs = append(buildArgs, "--detect-dependencies")
+		}
+		if relocate {
+			buildArgs = append(buildArgs, "--relocate")
+		}
 
 		for _, b := range binaries {
 			buildArgs = append(buildArgs, "--binaries", b)
@@ -63,15 +75,18 @@ var buildCmd = &cobra.Command{
 		for _, p := range pythonPkgs {
 			buildArgs = append(buildArgs, "--python", p)
 		}
+		for _, dependency := range dependencies {
+			buildArgs = append(buildArgs, "--dependency", dependency)
+		}
 
 		execCmd := exec.Command("python3", buildArgs...)
 		execCmd.Stdout = os.Stdout
 		execCmd.Stderr = os.Stderr
 
 		if err := execCmd.Run(); err != nil {
-			fmt.Printf("Build failed: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("build failed: %w", err)
 		}
+		return nil
 	},
 }
 
@@ -80,15 +95,18 @@ func init() {
 
 	buildCmd.Flags().String("name", "", "Package name")
 	buildCmd.Flags().String("version", "", "Package version")
-	buildCmd.Flags().String("output", "adpm/packages", "Output directory")
+	buildCmd.Flags().String("output", "dist", "Output directory")
 	buildCmd.Flags().String("platform", "", "Target platform")
 	buildCmd.Flags().Bool("strip", false, "Strip debug symbols")
-	buildCmd.Flags().String("compress", "bzip2", "Compression algorithm (bzip2, gzip, xz)")
+	buildCmd.Flags().String("compress", "bzip2", "Compression algorithm (bzip2, gzip, xz, zstd)")
 	buildCmd.Flags().Bool("sign", false, "GPG sign the resulting archive")
 	buildCmd.Flags().String("key", "", "GPG key ID to use for signing")
 	buildCmd.Flags().Bool("generate-sbom", false, "Generate and embed SBOM in package metadata")
+	buildCmd.Flags().Bool("detect-dependencies", false, "Recursively detect and bundle non-system native libraries")
+	buildCmd.Flags().Bool("relocate", false, "Rewrite native loader paths (implies --detect-dependencies)")
 
 	buildCmd.Flags().StringSlice("binaries", []string{}, "Binaries to include")
 	buildCmd.Flags().StringSlice("libraries", []string{}, "Libraries to include")
 	buildCmd.Flags().StringSlice("python", []string{}, "Python packages to include")
+	buildCmd.Flags().StringArray("dependency", []string{}, "ADPM dependency (NAME, NAME@CONSTRAINT, or NAME=VERSION; repeatable)")
 }

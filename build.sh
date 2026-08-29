@@ -4,14 +4,13 @@ set -e
 
 echo "Building ADPM CLI..."
 
-# Ensure dependencies are tidy
-go mod tidy
-
-# Build the binary (avoid conflict with adpm/ directory)
-go build -o adpm_cli cmd/adpm/main.go
+# Build the public CLI.
+ADPM_BUILD_CACHE="${ADPM_BUILD_CACHE:-${TMPDIR:-/tmp}/adpm-go-build-cache}"
+mkdir -p "$ADPM_BUILD_CACHE"
+GOCACHE="$ADPM_BUILD_CACHE" go build -o adpm cmd/adpm/main.go
 
 # Make sure it's executable
-chmod +x adpm_cli
+chmod +x adpm
 
-echo "SUCCESS! 'adpm_cli' binary is ready at ./adpm_cli"
-echo "You can run it with: ./adpm_cli --help"
+echo "SUCCESS! 'adpm' is ready at ./adpm"
+echo "You can run it with: ./adpm --help"

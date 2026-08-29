@@ -1,6 +1,6 @@
-# ADPM - AfterDark Package Manager
+# ADPM - After Dark Systems Package Manager
 
-**Format:** cpio.bz2 archives with metadata for cross-platform dependency management
+**Format:** compressed SVR4 `newc` CPIO archives with metadata for cross-platform dependency management
 
 **Homage to:** Todd Bennett III, unixeng
 
@@ -9,7 +9,7 @@
 ### Structure
 
 ```
-package.adpm (cpio.bz2 archive)
+package.adpm (compressed newc CPIO archive)
 ├── META.json              # Package metadata
 ├── INSTALL.sh             # Installation script
 ├── bin/                   # Compiled binaries (platform-specific)
@@ -33,7 +33,7 @@ package.adpm (cpio.bz2 archive)
   "name": "icloud-cli-full",
   "version": "0.1.0",
   "description": "iCloud CLI with all dependencies",
-  "packager": "AfterDark Package Manager",
+  "packager": "After Dark Systems Package Manager",
   "platforms": ["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-aarch64"],
   "dependencies": {
     "libimobiledevice": {
@@ -44,6 +44,13 @@ package.adpm (cpio.bz2 archive)
       "version": "4.0.0",
       "type": "python"
     }
+  },
+  "native_dependencies": {
+    "roots": ["/build/app"],
+    "bundled": ["/opt/vendor/lib/libexample.so.1"],
+    "excluded": ["/lib/x86_64-linux-gnu/libc.so.6"],
+    "unresolved": [],
+    "relocated": true
   },
   "install": {
     "requires_root": false,
@@ -58,19 +65,20 @@ package.adpm (cpio.bz2 archive)
 ### Building a Package
 
 ```bash
-./adpm/builder/adpm-build.py \
+./builder/adpm-build.py \
   --name icloud-cli-full \
   --version 0.1.0 \
   --platform darwin-arm64 \
-  --include-binaries /opt/homebrew/lib/libimobiledevice* \
-  --include-python pymobiledevice3 \
-  --output packages/icloud-cli-full.adpm
+  --binaries /opt/homebrew/bin/ideviceinfo \
+  --python pymobiledevice3 \
+  --detect-dependencies --relocate \
+  --output dist
 ```
 
 ### Installing a Package
 
 ```bash
-./adpm/installer/adpm-install.sh icloud-cli-full.adpm
+adpm install icloud-cli-full.adpm
 ```
 
 Auto-detects platform and extracts appropriate binaries.
@@ -79,7 +87,7 @@ Auto-detects platform and extracts appropriate binaries.
 
 ```bash
 # Create self-extracting installer
-cat adpm/installer/adpm-install.sh icloud-cli-full.adpm > icloud-cli-installer
+./builder/make-self-extracting.sh icloud-cli-full.adpm icloud-cli-installer
 chmod +x icloud-cli-installer
 
 # User just runs:

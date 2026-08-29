@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/afterdarksys/adpm/internal/pkgarchive"
 	"github.com/spf13/cobra"
 )
 
@@ -32,23 +33,9 @@ var scanCmd = &cobra.Command{
 		}
 		defer os.RemoveAll(tempDir)
 
-		// Use a script where the path is passed safely as an argument ($1)
-		extractHelper := `
-ARCHIVE="$1"
-if file "$ARCHIVE" | grep -qi "xz" || xz -t "$ARCHIVE" 2>/dev/null; then
-	unxz -c "$ARCHIVE" | cpio -idm --quiet 2>/dev/null
-elif file "$ARCHIVE" | grep -qi "gzip" || gzip -t "$ARCHIVE" 2>/dev/null; then
-	gunzip -c "$ARCHIVE" | cpio -idm --quiet 2>/dev/null
-else
-	bunzip2 -c "$ARCHIVE" | cpio -idm --quiet 2>/dev/null
-fi
-`
-		
-		extractCmd := exec.Command("bash", "-c", extractHelper, "bash", archivePath)
-		extractCmd.Dir = tempDir
-
-		if err := extractCmd.Run(); err != nil {
-			fmt.Printf("Warning: Extraction might be incomplete or failed: %v\n", err)
+		if err := pkgarchive.ExtractAuto(archivePath, tempDir); err != nil {
+			fmt.Printf("Error: Cannot safely extract package: %v\n", err)
+			os.Exit(1)
 		}
 
 		metaPath := filepath.Join(tempDir, "META.json")
@@ -97,11 +84,11 @@ fi
 		// Check if trivy is installed
 		if _, err := exec.LookPath("trivy"); err == nil {
 			fmt.Println("\n[INFO] Trivy scanner detected. Launching deep filesystem scan on payload...")
-			
+
 			trivyCmd := exec.Command("trivy", "fs", tempDir)
 			trivyCmd.Stdout = os.Stdout
 			trivyCmd.Stderr = os.Stderr
-			
+
 			if err := trivyCmd.Run(); err != nil {
 				fmt.Println("\n[WARN] Trivy scan found issues or returned an error code.")
 				if failOnVuln, _ := cmd.Flags().GetBool("fail-on-violation"); failOnVuln {
