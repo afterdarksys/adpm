@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,6 +69,18 @@ func TestPortableConversionMatrix(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(extracted, "META.json")); err != nil {
 				t.Fatal("converted ADPM missing META.json")
+			}
+			metadataBytes, err := os.ReadFile(filepath.Join(extracted, "META.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			provenance, ok := metadata["provenance"].(map[string]interface{})
+			if !ok || provenance["method"] != "adpm-convert" || provenance["source_sha256"] == "" {
+				t.Fatalf("converted ADPM missing package provenance: %#v", metadata["provenance"])
 			}
 			payload := filepath.Join(extracted, "payload", "linux-x86_64", "usr", "bin", "fixture")
 			if format == "adpm" {

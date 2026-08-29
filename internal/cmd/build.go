@@ -23,6 +23,10 @@ var buildCmd = &cobra.Command{
 		sbom, _ := cmd.Flags().GetBool("generate-sbom")
 		detectDependencies, _ := cmd.Flags().GetBool("detect-dependencies")
 		relocate, _ := cmd.Flags().GetBool("relocate")
+		sourceDir, _ := cmd.Flags().GetString("source-dir")
+		sourceURL, _ := cmd.Flags().GetString("source-url")
+		sourceRef, _ := cmd.Flags().GetString("source-ref")
+		noRecordBuild, _ := cmd.Flags().GetBool("no-record-build")
 
 		binaries, _ := cmd.Flags().GetStringSlice("binaries")
 		libraries, _ := cmd.Flags().GetStringSlice("libraries")
@@ -65,6 +69,18 @@ var buildCmd = &cobra.Command{
 		if relocate {
 			buildArgs = append(buildArgs, "--relocate")
 		}
+		if sourceDir != "" {
+			buildArgs = append(buildArgs, "--source-dir", sourceDir)
+		}
+		if sourceURL != "" {
+			buildArgs = append(buildArgs, "--source-url", sourceURL)
+		}
+		if sourceRef != "" {
+			buildArgs = append(buildArgs, "--source-ref", sourceRef)
+		}
+		if noRecordBuild {
+			buildArgs = append(buildArgs, "--no-record-build")
+		}
 
 		for _, b := range binaries {
 			buildArgs = append(buildArgs, "--binaries", b)
@@ -104,6 +120,10 @@ func init() {
 	buildCmd.Flags().Bool("generate-sbom", false, "Generate and embed SBOM in package metadata")
 	buildCmd.Flags().Bool("detect-dependencies", false, "Recursively detect and bundle non-system native libraries")
 	buildCmd.Flags().Bool("relocate", false, "Rewrite native loader paths (implies --detect-dependencies)")
+	buildCmd.Flags().String("source-dir", "", "Source tree used to capture Git provenance")
+	buildCmd.Flags().String("source-url", "", "Override the source repository URL")
+	buildCmd.Flags().String("source-ref", "", "Override the source revision")
+	buildCmd.Flags().Bool("no-record-build", false, "Do not add the archive to the local build ledger")
 
 	buildCmd.Flags().StringSlice("binaries", []string{}, "Binaries to include")
 	buildCmd.Flags().StringSlice("libraries", []string{}, "Libraries to include")

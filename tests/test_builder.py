@@ -40,7 +40,7 @@ class BuilderUnitTests(unittest.TestCase):
 
     def test_dependency_metadata_parses_constraints(self):
         with mock.patch.object(self.builder, "build_archive", return_value=self.root / "fixture.adpm"):
-            self.builder.build(target_platform="linux-x86_64", dependencies=["base@>=2.0", "exact=1.4"])
+            self.builder.build(target_platform="linux-x86_64", dependencies=["base@>=2.0", "exact=1.4"], record_build=False)
         dependencies = self.builder.metadata["dependencies"]
         self.assertEqual(dependencies["base"]["version"], ">=2.0")
         self.assertEqual(dependencies["exact"]["version"], "=1.4")
@@ -113,6 +113,16 @@ class BuilderUnitTests(unittest.TestCase):
     def test_readelf_needed_parser(self):
         output = " 0x0000000000000001 (NEEDED) Shared library: [libssl.so.3]\n"
         self.assertEqual(self.builder.parse_readelf_output(output), ["libssl.so.3"])
+
+    def test_source_provenance_records_explicit_source(self):
+        source = self.root / "source"
+        source.mkdir()
+        with mock.patch.object(self.builder, "_git_value", side_effect=["git@example/repo", "deadbeef", ""]):
+            provenance = self.builder.build_provenance(source_dir=str(source))
+        self.assertEqual(provenance["source_kind"], "source")
+        self.assertEqual(provenance["source_url"], "git@example/repo")
+        self.assertEqual(provenance["source_ref"], "deadbeef")
+        self.assertFalse(provenance["source_dirty"])
 
 
 if __name__ == "__main__":

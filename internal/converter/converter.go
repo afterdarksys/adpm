@@ -2,6 +2,7 @@ package converter
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/afterdarksys/adpm/internal/pkgarchive"
 )
@@ -29,6 +31,7 @@ type metadata struct {
 	SourceFormat string                 `json:"source_format,omitempty"`
 	Dependencies map[string]interface{} `json:"dependencies"`
 	Install      map[string]interface{} `json:"install"`
+	Provenance   map[string]interface{} `json:"provenance,omitempty"`
 }
 
 var aliases = map[string]string{
@@ -72,7 +75,15 @@ func Convert(opts ConversionOptions) error {
 	}
 	defer os.RemoveAll(stage)
 
-	meta := metadata{Name: opts.Name, Version: opts.Version, Packager: "After Dark Systems Package Manager", SourceFormat: inFmt, Dependencies: map[string]interface{}{}, Install: map[string]interface{}{"requires_root": false, "install_prefix": "~/.local"}}
+	inputHash, err := fileSHA256(input)
+	if err != nil {
+		return err
+	}
+	meta := metadata{Name: opts.Name, Version: opts.Version, Packager: "After Dark Systems Package Manager", SourceFormat: inFmt, Dependencies: map[string]interface{}{}, Install: map[string]interface{}{"requires_root": false, "install_prefix": "~/.local"}, Provenance: map[string]interface{}{
+		"method": "adpm-convert", "source_kind": "package", "source_format": inFmt,
+		"source_path": input, "source_sha256": inputHash,
+		"converted_at": time.Now().UTC().Truncate(time.Second).Format(time.RFC3339),
+	}}
 	if err := extract(input, inFmt, stage, &meta); err != nil {
 		return fmt.Errorf("extract %s: %w", inFmt, err)
 	}
@@ -124,6 +135,19 @@ func Convert(opts ConversionOptions) error {
 	}
 	fmt.Printf("Created %s\n", output)
 	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
 func extract(input, format, stage string, meta *metadata) error {
@@ -211,6 +235,9 @@ func readADPMMetadata(stage string, meta *metadata) {
 	}
 	if len(existing.Platforms) > 0 {
 		meta.Platforms = existing.Platforms
+	}
+	if existing.Provenance != nil {
+		meta.Provenance = existing.Provenance
 	}
 }
 

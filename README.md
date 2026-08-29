@@ -12,6 +12,8 @@ The public executable is `adpm` and every operation follows `adpm <command> [opt
 ./adpm --help
 ./adpm inspect package.adpm
 ./adpm validate package.adpm
+./adpm status
+./adpm history
 ```
 
 ## Package Conversion
@@ -58,6 +60,61 @@ Run the complete builder, conversion, archive, and installer suite with:
 tests/run.sh
 ```
 
+## Lifecycle State and Ownership
+
+ADPM keeps current installations, durable lifecycle history, build records, and
+file ownership under `${ADPM_DB:-~/.local/share/adpm}`. Builds capture source
+provenance and the archive SHA-256; installs retain that provenance and record
+the exact files copied. Removal deletes the current installed record but leaves
+the append-only history intact.
+
+```bash
+adpm status                 # all currently installed packages
+adpm status package-name    # one current installation record
+adpm history                # builds, installs, upgrades, rollbacks, removals
+adpm history package-name   # history for one package
+```
+
+Before copying files, the installer rejects paths owned by another ADPM package.
+Uninstall only removes paths still owned by that package. Existing 0.3.0
+installed records remain readable and gain ownership state on their next
+install or upgrade.
+
+## Configuration and Automation
+
+ADPM reads YAML configuration (with a `.cfg` extension) from `/etc/adpm/` and
+then `$HOME/.adpm/`. `adpm.cfg` controls CLI paths and command defaults;
+`adpm_auto.cfg` supplies non-interactive policy, reusable answers, and
+automation-specific defaults. User values override system values, while
+`--config`, `--auto-config`, `ADPM_CONFIG`, and `ADPM_AUTO_CONFIG` can select
+additional higher-precedence files.
+
+```yaml
+# ~/.adpm/adpm.cfg
+database: ~/.local/share/adpm
+prefix: ~/.local
+defaults:
+  build:
+    compress: zstd
+  install:
+    verify: true
+```
+
+```yaml
+# ~/.adpm/adpm_auto.cfg
+enabled: true
+non_interactive: true
+assume_yes: false
+answers:
+  replace_modified_file: false
+```
+
+Use `adpm config` to inspect the effective merged configuration and its source
+files. When enabled, resolved automation policy and answers are passed to ADPM
+subprocesses as environment data, not executable snippets. Automation settings
+never disable package verification, dependency, platform, or ownership safety
+checks.
+
 ## The Problem
 
 Python packages with C dependencies are a pain:
@@ -93,6 +150,7 @@ gzip, xz, and zstd are supported) containing:
 package.adpm (cpio.bz2)
 ├── META.json           # Package metadata
 ├── INSTALL.sh          # Installation logic
+├── .ADPM_STATE.py      # Embedded lifecycle support for self-extracting use
 ├── bin/                # Platform-specific binaries
 │   ├── darwin-arm64/
 │   ├── darwin-x86_64/

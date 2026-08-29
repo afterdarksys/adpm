@@ -16,7 +16,9 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -72,6 +74,8 @@ class ADPMBuilder:
         (self.temp_dir / "bin").mkdir(exist_ok=True)
         (self.temp_dir / "lib").mkdir(exist_ok=True)
         (self.temp_dir / "python").mkdir(exist_ok=True)
+        state_tool = Path(__file__).resolve().parent.parent / "installer" / "adpm_state.py"
+        shutil.copyfile(state_tool, self.temp_dir / ".ADPM_STATE.py")
         return self.temp_dir
 
     @staticmethod
@@ -177,6 +181,64 @@ class ADPMBuilder:
             "version": version,
             "platforms": platforms
         }
+
+    @staticmethod
+    def _git_value(source_dir: Path, arguments: List[str]):
+        try:
+            result = subprocess.run(["git", "-C", str(source_dir)] + arguments,
+                                    check=True, capture_output=True, text=True)
+            return result.stdout.strip()
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return ""
+
+    def build_provenance(self, binaries=None, libraries=None, source_dir=None,
+                         source_url=None, source_ref=None):
+        """Describe where the packaged inputs came from without claiming compilation."""
+        source_path = Path(source_dir).expanduser().resolve() if source_dir else None
+        if source_path and not source_path.is_dir():
+            raise ValueError(f"Source directory does not exist: {source_path}")
+        detected_url = self._git_value(source_path, ["remote", "get-url", "origin"]) if source_path else ""
+        detected_ref = self._git_value(source_path, ["rev-parse", "HEAD"]) if source_path else ""
+        dirty = bool(self._git_value(source_path, ["status", "--porcelain"])) if source_path else False
+        return {
+            "method": "adpm-build",
+            "source_kind": "source" if source_path else "local-files",
+            "source_dir": str(source_path) if source_path else "",
+            "source_url": source_url or detected_url,
+            "source_ref": source_ref or detected_ref,
+            "source_dirty": dirty,
+            "inputs": {
+                "binaries": [str(Path(value).expanduser().resolve()) for value in binaries or []],
+                "libraries": [str(Path(value).expanduser().resolve()) for value in libraries or []],
+            },
+            "command": shlex.join(sys.argv),
+            "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "host": {"os": platform.system(), "architecture": platform.machine(), "python": platform.python_version()},
+        }
+
+    @staticmethod
+    def sha256_file(path: Path):
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    def record_build_state(self, archive_path: Path):
+        state_tool = Path(__file__).resolve().parents[1] / "installer" / "adpm_state.py"
+        database = Path(os.environ.get("ADPM_DB", "~/.local/share/adpm")).expanduser()
+        record = {
+            "name": self.name,
+            "version": self.version,
+            "archive_path": str(Path(archive_path).resolve()),
+            "sha256": self.sha256_file(archive_path),
+            "size": Path(archive_path).stat().st_size,
+            "built_at": self.metadata.get("provenance", {}).get("built_at", ""),
+            "provenance": self.metadata.get("provenance", {}),
+            "metadata": self.metadata,
+        }
+        subprocess.run([sys.executable, str(state_tool), "build", "--db", str(database),
+                        "--record", json.dumps(record)], check=True)
 
     @staticmethod
     def parse_ldd_output(output: str):
@@ -482,7 +544,9 @@ exit 0
               strip: bool = False, compress: str = "bzip2",
               sign: bool = False, key: str = None, generate_sbom: bool = False,
               dependencies: List[str] = None, detect_dependencies: bool = False,
-              relocate: bool = False):
+              relocate: bool = False, source_dir: str = None,
+              source_url: str = None, source_ref: str = None,
+              record_build: bool = True):
         """Build complete package."""
         try:
             if not target_platform:
@@ -493,6 +557,8 @@ exit 0
 
             self.create_staging_dir()
             self.metadata["platforms"].append(target_platform)
+            self.metadata["provenance"] = self.build_provenance(
+                binaries, libraries, source_dir, source_url, source_ref)
 
             for dependency in dependencies or []:
                 name, separator, constraint = dependency.partition("@")
@@ -553,6 +619,8 @@ exit 0
             archive_path = self.build_archive(compress)
             if sign:
                 self.sign_archive(archive_path, key)
+            if record_build:
+                self.record_build_state(archive_path)
                 
             return archive_path
 
@@ -579,6 +647,10 @@ def main():
     parser.add_argument("--dependency", action="append", default=[], help="ADPM dependency as NAME, NAME@CONSTRAINT, or NAME=VERSION")
     parser.add_argument("--detect-dependencies", action="store_true", help="Recursively detect and bundle non-system native libraries")
     parser.add_argument("--relocate", action="store_true", help="Rewrite loader paths for bundled libraries (implies --detect-dependencies)")
+    parser.add_argument("--source-dir", help="Source tree used to produce the packaged files (captures Git provenance)")
+    parser.add_argument("--source-url", help="Override source repository URL in build provenance")
+    parser.add_argument("--source-ref", help="Override source revision in build provenance")
+    parser.add_argument("--no-record-build", action="store_true", help="Do not record this archive in the local ADPM build ledger")
 
     args = parser.parse_args()
 
@@ -595,7 +667,11 @@ def main():
         generate_sbom=args.generate_sbom,
         dependencies=args.dependency,
         detect_dependencies=args.detect_dependencies,
-        relocate=args.relocate
+        relocate=args.relocate,
+        source_dir=args.source_dir,
+        source_url=args.source_url,
+        source_ref=args.source_ref,
+        record_build=not args.no_record_build
     )
 
 

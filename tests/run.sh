@@ -11,7 +11,7 @@ export PYTHONPYCACHEPREFIX="$TEST_TMP/pycache"
 export GOCACHE="$TEST_TMP/go-cache"
 
 echo "==> Python builder unit tests"
-python3 -m unittest discover -s tests -p 'test_builder.py' -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 echo "==> Go unit and conversion-matrix tests"
 go test ./...

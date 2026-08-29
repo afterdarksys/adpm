@@ -16,6 +16,10 @@ set -e
 ADPM_VERSION="0.3.0"
 INSTALL_PREFIX="${ADPM_PREFIX:-$HOME/.local}"
 ADPM_DB="${ADPM_DB:-$HOME/.local/share/adpm}"  # Package registry
+STATE_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/adpm_state.py"
+CURRENT_ARCHIVE=""
+CURRENT_ARCHIVE_SHA256=""
+INSTALL_ACTION="install"
 TEMP_DIR=$(mktemp -d -t adpm.XXXXXX)
 
 cleanup() {
@@ -91,6 +95,7 @@ extract_archive() {
     fi
 
     [ -f "$archive_file" ] || { log_error "Archive not found: $archive_file"; exit 1; }
+    CURRENT_ARCHIVE_SHA256=$(archive_checksum "$archive_file")
 
     # Detect compression type
     local file_type=""
@@ -215,24 +220,83 @@ if platforms and current not in platforms and "all" not in platforms and "platfo
 PY
 }
 
+resolve_state_tool() {
+    if [ ! -f "$STATE_TOOL" ] && [ ! -f "$TEMP_DIR/.ADPM_STATE.py" ] && is_self_extracting; then
+        extract_archive "" "$TEMP_DIR"
+    fi
+    if [ ! -f "$STATE_TOOL" ] && [ -f "$TEMP_DIR/.ADPM_STATE.py" ]; then
+        STATE_TOOL="$TEMP_DIR/.ADPM_STATE.py"
+    fi
+    [ -f "$STATE_TOOL" ] || { log_error "ADPM state manager not found: $STATE_TOOL"; exit 1; }
+}
+
+archive_checksum() {
+    local archive="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$archive" | awk '{print $1}'
+    else
+        shasum -a 256 "$archive" | awk '{print $1}'
+    fi
+}
+
+plan_install_files() {
+    local platform="$1"
+    python3 - "$TEMP_DIR" "$INSTALL_PREFIX" "$platform" <<'PY'
+import json, pathlib, sys
+source, prefix, platform = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+files = []
+for kind in ("bin", "lib"):
+    directory = source / kind / platform
+    if directory.is_dir():
+        files.extend(str(prefix / kind / item.name) for item in directory.iterdir() if item.is_file())
+payload = source / "payload" / platform
+if payload.is_dir():
+    for item in payload.rglob("*"):
+        if item.is_dir():
+            continue
+        relative = item.relative_to(payload)
+        parts = relative.parts
+        if parts[:2] == ("usr", "local"):
+            relative = pathlib.Path(*parts[2:])
+        elif parts[:1] == ("usr",):
+            relative = pathlib.Path(*parts[1:])
+        files.append(str(prefix / relative))
+print(json.dumps(sorted(set(files))))
+PY
+}
+
+check_install_ownership() {
+    local platform="$1"
+    local planned_files
+    planned_files=$(plan_install_files "$platform")
+    python3 "$STATE_TOOL" check-ownership --db "$ADPM_DB" \
+        --package "$PACKAGE_NAME" --files "$planned_files"
+}
+
 # ── Package DB ────────────────────────────────────────────────
 db_record_install() {
     local name="$1" version="$2" prefix="$3" files_json="$4"
-    mkdir -p "$ADPM_DB/installed"
-    cat > "$ADPM_DB/installed/${name}.json" <<JSON
-{
-  "name": "${name}",
-  "version": "${version}",
-  "prefix": "${prefix}",
-  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "files": ${files_json:-[]}
+    local record="$TEMP_DIR/install-record.json"
+    python3 - "$TEMP_DIR/META.json" "$name" "$version" "$prefix" "$files_json" \
+        "$CURRENT_ARCHIVE" "$CURRENT_ARCHIVE_SHA256" > "$record" <<'PY'
+import datetime, json, pathlib, sys
+meta_path, name, version, prefix, files, archive, checksum = sys.argv[1:]
+metadata = json.load(open(meta_path))
+record = {
+    "name": name, "version": version, "prefix": prefix,
+    "installed_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "files": json.loads(files), "archive_path": archive, "archive_sha256": checksum,
+    "source_format": metadata.get("source_format", "adpm"),
+    "provenance": metadata.get("provenance", {}),
 }
-JSON
+print(json.dumps(record))
+PY
+    python3 "$STATE_TOOL" install --db "$ADPM_DB" --record - --action "$INSTALL_ACTION" < "$record"
 }
 
 db_record_remove() {
     local name="$1"
-    rm -f "$ADPM_DB/installed/${name}.json"
+    python3 "$STATE_TOOL" remove --db "$ADPM_DB" --package "$name"
 }
 
 db_get_installed() {
@@ -288,9 +352,18 @@ rollback_package() {
     PACKAGE_NAME="$name"
     local snapshot="$ADPM_DB/rollback/$name"
     [ -f "$snapshot/record.json" ] || { log_error "No rollback snapshot for '$name'"; exit 1; }
-    python3 - "$name" "$ADPM_DB" "$snapshot" <<'PY'
+    resolve_state_tool
+    local restored_record="$TEMP_DIR/rollback-record.json"
+    local rollback_files
+    rollback_files=$(python3 - "$snapshot/record.json" <<'PY'
+import json, sys
+print(json.dumps(json.load(open(sys.argv[1])).get("files", [])))
+PY
+)
+    python3 "$STATE_TOOL" check-ownership --db "$ADPM_DB" --package "$name" --files "$rollback_files"
+    python3 - "$name" "$ADPM_DB" "$snapshot" "$restored_record" <<'PY'
 import json, pathlib, shutil, sys
-name, db, snapshot = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+name, db, snapshot, restored = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
 current = db / "installed" / (name + ".json")
 if current.exists():
     for target in json.load(open(current)).get("files", []):
@@ -301,8 +374,9 @@ for item in json.load(open(snapshot / "manifest.json")):
     target = pathlib.Path(item["target"])
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(item["backup"], target)
-shutil.copy2(snapshot / "record.json", current)
+shutil.copy2(snapshot / "record.json", restored)
 PY
+    python3 "$STATE_TOOL" install --db "$ADPM_DB" --record - --action rollback < "$restored_record"
     log_success "Rolled '$name' back to the previous installed version"
 }
 
@@ -363,7 +437,6 @@ verify_checksum() {
 install_package() {
     local platform="$1"
     local files_json="[]"
-    local installed_files=""
 
     log_info "Installing for platform: $platform"
     mkdir -p "$INSTALL_PREFIX"/{bin,lib}
@@ -377,7 +450,6 @@ install_package() {
             cp "$binary" "$INSTALL_PREFIX/bin/"
             chmod +x "$INSTALL_PREFIX/bin/$(basename "$binary")"
             log_success "  $(basename "$binary")"
-            installed_files="${installed_files}\"$INSTALL_PREFIX/bin/$(basename "$binary")\","
         done
     else
         log_warn "No binaries for platform $platform"
@@ -391,7 +463,6 @@ install_package() {
             [ -f "$lib" ] || continue
             cp "$lib" "$INSTALL_PREFIX/lib/"
             log_success "  $(basename "$lib")"
-            installed_files="${installed_files}\"$INSTALL_PREFIX/lib/$(basename "$lib")\","
         done
     fi
 
@@ -400,9 +471,7 @@ install_package() {
     local payload_dir="$TEMP_DIR/payload/$platform"
     if [ -d "$payload_dir" ] && command -v python3 >/dev/null 2>&1; then
         log_info "Installing preserved package payload → $INSTALL_PREFIX"
-        while IFS= read -r installed; do
-            [ -n "$installed" ] && installed_files="${installed_files}\"${installed}\","
-        done < <(python3 - "$payload_dir" "$INSTALL_PREFIX" <<'PY'
+        python3 - "$payload_dir" "$INSTALL_PREFIX" <<'PY'
 import os, pathlib, shutil, sys
 source, prefix = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 def mapped(relative):
@@ -428,9 +497,7 @@ for item in source.rglob("*"):
     else:
         shutil.copyfile(item, target)
         target.chmod(item.stat().st_mode & 0o777)
-    print(target)
 PY
-)
     fi
 
     # Python packages
@@ -450,10 +517,9 @@ PY
         (cd "$TEMP_DIR" && bash INSTALL.sh)
     fi
 
-    # Clean up trailing comma for json
-    if [ -n "$installed_files" ]; then
-        files_json="[${installed_files%,}]"
-    fi
+    # Reuse the safely JSON-encoded preflight plan for the ownership record.
+    # At this point every copy operation has succeeded under `set -e`.
+    files_json=$(plan_install_files "$platform")
 
     # Record in DB
     db_record_install "$PACKAGE_NAME" "$PACKAGE_VERSION" "$INSTALL_PREFIX" "$files_json"
@@ -482,14 +548,23 @@ uninstall_package() {
 
     # read files array if it exists
     local files_list=""
+    resolve_state_tool
     if command -v python3 >/dev/null 2>&1; then
-        files_list=$(echo "$info" | python3 -c 'import sys, json; data=json.loads(sys.stdin.read()); print("\n".join(data.get("files", [])))' 2>/dev/null || true)
+        files_list=$(echo "$info" | python3 -c '
+import json, pathlib, sys
+record = json.loads(sys.stdin.read())
+owners_path = pathlib.Path(sys.argv[1]) / "owners.json"
+owners = json.load(open(owners_path)).get("files", {}) if owners_path.exists() else {}
+name = sys.argv[2]
+print("\n".join(path for path in record.get("files", [])
+                if path not in owners or owners[path].get("package") == name))
+' "$ADPM_DB" "$name" 2>/dev/null || true)
     fi
 
     if [ -n "$files_list" ]; then
         log_info "Removing tracked files..."
         while IFS= read -r f; do
-            if [ -n "$f" ] && [ -f "$f" ]; then
+            if [ -n "$f" ] && { [ -f "$f" ] || [ -L "$f" ]; }; then
                 rm -f "$f"
                 log_success "Removed: $f"
             fi
@@ -523,12 +598,15 @@ upgrade_package() {
     log_info "Preparing upgrade..."
 
     extract_archive "$archive" "$TEMP_DIR"
+    CURRENT_ARCHIVE="$archive"
     read_metadata
+    resolve_state_tool
     check_dependencies || { log_error "Dependency resolution failed"; exit 1; }
     local platform
     platform=$(detect_platform)
     [ "$platform" = "unknown" ] && { log_error "Unsupported platform"; exit 1; }
     check_platform "$platform" || { log_error "Package is incompatible with this platform"; exit 1; }
+    check_install_ownership "$platform" || { log_error "Package file ownership conflict"; exit 1; }
 
     local existing
     existing=$(db_get_installed "$PACKAGE_NAME")
@@ -538,6 +616,7 @@ upgrade_package() {
         log_info "Upgrading $PACKAGE_NAME: v$old_version → v$PACKAGE_VERSION"
         create_rollback_snapshot "$PACKAGE_NAME"
         uninstall_package "$PACKAGE_NAME"
+        INSTALL_ACTION="upgrade"
     else
         log_info "No existing installation found — performing fresh install"
     fi
@@ -645,9 +724,11 @@ main() {
             local target_arch=""
             if is_self_extracting; then
                 log_info "Self-extracting installer"
+                CURRENT_ARCHIVE="$0"
             else
                 [ -z "$arg1" ] && { log_error "Usage: $0 <package.adpm>"; exit 1; }
                 target_arch="$arg1"
+                CURRENT_ARCHIVE="$target_arch"
             fi
             
             if [ -n "$target_arch" ] && [ "$verify" -eq 1 ]; then
@@ -658,6 +739,7 @@ main() {
             extract_archive "$target_arch" "$TEMP_DIR"
 
             read_metadata
+            resolve_state_tool
 
             check_dependencies || { log_error "Dependency resolution failed"; exit 1; }
 
@@ -673,6 +755,7 @@ main() {
             echo ""
 
             check_platform "$platform" || { log_error "Package is incompatible with this platform"; exit 1; }
+            check_install_ownership "$platform" || { log_error "Package file ownership conflict"; exit 1; }
 
             install_package "$platform"
             ;;
